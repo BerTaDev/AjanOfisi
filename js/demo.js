@@ -34,6 +34,7 @@ const Demo = {
       return a;
     });
     const [opus, sonnet, haiku, fable, s2, h2, o2] = team;
+    haiku.prefLaptop = true; h2.prefLaptop = true;
     [opus, sonnet, fable].forEach((a, i) => {
       a.needDesk(); a.place(a.desk); a.seated = true;
       const t = this.tasks[i]; t.reserved = true; t.status = 'in_progress'; t.who = a.name; t.step = randi(1, 3);
@@ -117,9 +118,10 @@ const Demo = {
         a.setStatus(st.screen === 'think' ? 'thinking' : 'working');
         a.setIcon(st.icon, '#2a1f2a', Math.min(st.dur, 2.5));
         a.logAction(st.label);
-        if (st.label.startsWith('Write')) World.printing = G.time + 2.5;
+        if (st.label.startsWith('Write')) { World.printing = G.time + 2.5; Sfx.printer(); }
         const vars = { task: t.text, file: pick(this.proj.files) };
         if (st.screen === 'think' && chance(0.5)) a.say(fill(pick(L.think), vars), 'think');
+        else if (chance(0.05)) { a.duckUntil = G.time + 14; a.say(pick(['Lastik ördek, dinle: bu fonksiyon neden null dönüyor?', 'Ördeğe anlatırken hatayı buldum!', 'Lastik ördek her şeyi bilir.', 'Ördek, sence bu bir yarış durumu mu?'])); }
         else if (chance(0.16)) a.say(fill(pick(L.work), vars));
         else if (chance(0.12) && G.time > this.cool.chat) { this.cool.chat = G.time + 10; this.deskChat(a, vars); }
         await api.wait(st.dur);
@@ -132,7 +134,7 @@ const Demo = {
       a.setIcon('check', '#3aa070', 2.5);
       a.setStatus('done', t.text + ' bitti');
       a.logAction('✓ ' + t.text);
-      Sfx.done();
+      Sfx.done(a.x);
       a.say(fill(pick(L.done), { task: t.text }));
       const mate = G.agents.find(b => b !== a && !b.sleeping && b.visible && b.kind === 'main' && dist(a, b) < 120);
       if (mate) TIMERS.push({ at: G.time + 1.6, res: () => { if (!mate.removed && !mate.sleeping) mate.say(pick(L.doneReply)); } });
@@ -171,17 +173,30 @@ const Demo = {
     a.mind = 'free';
     a.run(async api => {
       for (;;) {
-        const r = Math.random();
-        if ((a.fatigue > 80 && chance(0.6)) || r < 0.05) { await this.nap(a, api); continue; }
-        if (r < 0.42) await this.coffee(a, api);
-        else if (r < 0.54) await this.visit(a, api, SPOTS.windowSpot, L.window, 'Pencereden bakıyor');
-        else if (r < 0.66) await this.visit(a, api, SPOTS.arcade, L.arcade, 'Atari oynuyor');
-        else if (r < 0.76) await this.visit(a, api, SPOTS.cooler, null, 'Su içiyor');
-        else if (r < 0.88) await this.visit(a, api, SPOTS.lounge, null, 'Dinleniyor');
-        else { await a.goWork(api); a.screen = 'chat'; a.setStatus('idle', 'Mesajları okuyor'); await api.wait(rand(6, 10)); a.screen = 'idle'; }
+        let act = Hangout.pick();
+        if (a.fatigue > 80 && chance(0.6)) act = 'nap';
+        if (act === 'nap') { await this.nap(a, api); continue; }
+        await Hangout.run(act, a, api);
         await api.wait(rand(1, 3));
       }
     });
+  },
+
+  // kedi işi gibi kısa bir görevden dönen ajanı eski hâline al
+  resume(a, wasAsleep) {
+    if (!this.active || a.removed) return;
+    if (wasAsleep) {
+      a.mind = 'sleep';
+      a.run(async api => {
+        await a.sleepSomewhere(api, true);
+        await api.wait(rand(40, 90));
+        await a.wakeUp(api, pick(L.rested));
+        a.fatigue = 0;
+      }).then(ok => { if (ok) { a.mind = 'free'; this.next(a); } });
+      return;
+    }
+    a.mind = a.task ? 'busy' : 'free';
+    this.next(a);
   },
 
   async visit(a, api, list, lines, action) {
@@ -199,6 +214,7 @@ const Demo = {
     a.setStatus('break', 'Kahve alıyor');
     await api.go(sp);
     World.coffeeBrew = G.time + 3;
+    Sfx.coffee();
     await api.wait(3);
     a.mug = true;
     const ks = freeSpot(SPOTS.kitchen, a);
@@ -255,7 +271,7 @@ const Demo = {
     const w = this.lead();
     const done = ok => { if (ok) { s.mind = 'free'; s.fatigue = 0; this.next(s); } };
     if (!w || w === s || !['busy', 'free'].includes(w.mind) || chance(0.25)) {
-      s.run(async api => { s.setIcon('bolt', '#e07a55', 2); await api.say(pick(L.alarm), 2.2); await s.wakeUp(api); }).then(done);
+      s.run(async api => { s.setIcon('bolt', '#e07a55', 2); Sfx.alarm(s.x); await api.say(pick(L.alarm), 2.2); await s.wakeUp(api); }).then(done);
       return;
     }
     w.mind = 'errand';
@@ -288,8 +304,9 @@ const Demo = {
 
   spawnSupport(type, caller, task) {
     if (!this.active) return;
-    const s = World.add(new Agent({ name: type.name, role: type.role, kind: 'sub', seed: randi(1000, 99999) }));
-    s.mind = 'support'; s.caller = caller;
+    const seed = randi(1000, 99999);
+    const s = World.add(new Agent({ name: type.name, role: type.role, kind: 'sub', seed, look: caller ? makeLook(seed, caller.look.shirt) : undefined }));
+    s.mind = 'support'; s.caller = caller; s.parentAgent = caller;
     if (!task) { task = { text: 'Kod taraması', status: 'pending', who: s.name, step: 0, steps: makeSteps(this.proj), reserved: true }; this.tasks.push(task); }
     s.task = task; task.who = s.name;
     UI.sys(`${s.name} destek ajanı kapıdan girdi.`);
@@ -327,7 +344,9 @@ const Demo = {
     this.phase = 'standup';
     const lead = this.lead();
     const awake = G.agents.filter(a => a.kind === 'main' && !['sleep', 'waking', 'errand'].includes(a.mind) && a !== lead);
-    const seats = shuffle(SPOTS.meetTop.concat(SPOTS.meetBottom).filter(s => !s.owner && !s.by));
+    const meetSeats = SPOTS.meetTop.concat(SPOTS.meetBottom);
+    for (const a of awake.concat(lead ? [lead] : [])) if (a.spot && meetSeats.includes(a.spot)) release(a);
+    const seats = shuffle(meetSeats.filter(s => !s.owner && !s.by));
     awake.forEach((a, i) => {
       a.mind = 'meeting';
       const seat = seats[i];
@@ -369,10 +388,69 @@ const Demo = {
     if (lead) lead.say(fill(L.party[0], { project: this.proj.title }), 'shout');
     UI.sys(`${this.proj.title} projesi tamamlandı.`);
     World.burst(W / 2, 120, 70);
+    Sfx.jingle();
     G.agents.filter(a => a.kind === 'main' && !a.sleeping && a !== lead).forEach((a, i) => {
       TIMERS.push({ at: G.time + 1 + i * 0.6, res: () => { if (a.removed || a.sleeping) return; a.armsUp = a.pose === 'stand'; a.say(pick(L.party.slice(1))); TIMERS.push({ at: G.time + 1.8, res: () => { a.armsUp = false; } }); } });
     });
-    TIMERS.push({ at: G.time + 12, res: () => { if (this.active) this.newProject(true); } });
+    // kutlama pizzası: telefon, kurye, toplantı masasında ziyafet
+    TIMERS.push({ at: G.time + 4, res: () => this.orderPizza() });
+    TIMERS.push({ at: G.time + 75, res: () => { if (this.active && this.phase === 'party') this.newProject(true); } });
+  },
+
+  orderPizza() {
+    if (!this.active) return;
+    const lead = this.lead();
+    const c = lead && ['free', 'busy'].includes(lead.mind) && !lead.sleeping ? lead : G.agents.find(a => a.kind === 'main' && a.mind === 'free' && !a.sleeping);
+    if (c) {
+      c.mind = 'errand';
+      c.run(async api => {
+        await c.phoneCall(api, pick(['Alo, pizzacı? Ekibe beş büyük pizza lütfen!', 'İyi akşamlar, bol malzemeli pizza istiyoruz. Kutlama var!', 'Pizzacı mı? Bir ofis dolusu aç ajan var.']), 3.2);
+        await api.say('Pizzalar yolda!', 1.8);
+      }).then(ok => { if (ok) { c.mind = 'free'; this.next(c); } });
+    }
+    UI.sys('Kutlama için pizza söylendi.');
+    TIMERS.push({ at: G.time + 9, res: () => this.courier() });
+  },
+
+  courier() {
+    if (!this.active) return;
+    const seed = randi(1, 99999);
+    const look = makeLook(seed, '#d0453a');
+    look.style = 'cap'; look.cap = '#f2c14e'; look.glasses = false; look.phones = false;
+    const c = World.add(new Agent({ name: 'Kurye', role: 'Pizza teslimatı', kind: 'guest', seed, look }));
+    c.mug = false;
+    c.run(async api => {
+      await c.arrive(api, { tx: 7, ty: 5, x: 7 * T + 8, y: 5 * T + 11, dir: 'left', pose: 'stand' });
+      c.setStatus('arriving', 'Pizzaları getirdi');
+      await api.say('Pizzalar geldi! Afiyet olsun.', 2.4);
+      World.pizzaUntil = G.time + 60; World.pizzaSlices = 9;
+      UI.sys('Pizzalar geldi, ekip toplantı masasına toplanıyor.');
+      this.pizzaParty();
+      await api.wait(1);
+      await c.leave(api, 'İyi çalışmalar!');
+    });
+  },
+
+  pizzaParty() {
+    const eaters = G.agents.filter(a => a.kind === 'main' && a.mind === 'free' && !a.sleeping);
+    const seats = shuffle(SPOTS.meetTop.concat(SPOTS.meetBottom).filter(s => !s.owner && !s.by));
+    eaters.forEach((a, i) => {
+      const seat = seats[i];
+      if (!seat) return;
+      a.mind = 'party';
+      a.run(async api => {
+        a.setStatus('break', 'Pizza yiyor');
+        await api.go(seat);
+        if (World.pizzaSlices > 0) { World.pizzaSlices--; a.slice = true; }
+        await api.wait(rand(0.5, 2));
+        if (chance(0.7)) a.say(pick(['Ohh, sıcacık.', 'Ananaslı olanı kim söyledi?!', 'En güzel pizza kutlama pizzasıdır.', 'Bir dilim daha alabilir miyim?', 'Kod yazmaktan iyidir.', 'Peynir uzadıkça uzuyor.']));
+        await api.wait(rand(10, 16));
+        if (World.pizzaSlices > 0 && chance(0.5)) { World.pizzaSlices--; a.say('Bir tane daha…'); await api.wait(5); }
+        a.slice = false;
+        await api.wait(60);
+      });
+    });
+    TIMERS.push({ at: G.time + 24, res: () => { if (this.active && this.phase === 'party') this.newProject(true); } });
   },
 
   // ---- düğmeler ----

@@ -71,6 +71,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--claude
 }
 .btn:hover { border-color: var(--claude); }
 .btn[hidden] { display: none !important; }
+#vol { width: 84px; accent-color: var(--claude); }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .live-dot.on { background: var(--work); box-shadow: 0 0 0 0 var(--work); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(95,201,168,.6); } 100% { box-shadow: 0 0 0 9px rgba(95,201,168,0); } }
@@ -109,6 +110,8 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--claude
 }
 .agent:hover { background: var(--panel-2); }
 .agent.sel { border-color: var(--claude); background: var(--panel-2); }
+.agent.sub { margin-left: 18px; border-left: 2px solid var(--sub); border-radius: 0 5px 5px 0; }
+.agent .kids { margin-left: 6px; font: 600 11px var(--f-body); color: var(--sub); }
 .agent canvas { grid-row: span 2; width: 30px; height: 30px; image-rendering: pixelated; background: var(--panel-2); border-radius: 4px; }
 .agent .nm { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .agent .nm small { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
@@ -180,6 +183,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--claude
     <button class="btn" id="btnWake">Uyandır</button>
     <button class="btn" id="btnProject">Yeni proje</button>
     <button class="btn" id="btnSound" aria-pressed="false">Ses: kapalı</button>
+    <input type="range" id="vol" min="0" max="100" value="80" aria-label="Ses düzeyi" title="Ses düzeyi">
   </div>
 </header>
 
@@ -212,9 +216,12 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--claude
 
 <script src="js/util.js"></script>
 <script src="js/map.js"></script>
+<script src="js/sound.js"></script>
 <script src="js/draw.js"></script>
 <script src="js/people.js"></script>
 <script src="js/agents.js"></script>
+<script src="js/cat.js"></script>
+<script src="js/hangout.js"></script>
 <script src="js/world.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/demo-lines.js"></script>

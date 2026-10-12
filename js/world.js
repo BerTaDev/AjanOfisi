@@ -8,6 +8,11 @@ const World = {
   hooks: [],
   zzz: [],
   confetti: [],
+  hearts: [],
+  notes: [],
+  bowls: { food: 0.55, water: 0.7 },
+  laser: null,
+  pizzaUntil: 0, pizzaSlices: 0,
 
   burst(x, y, n) {
     const cols = ['#e07a55', '#5fc9a8', '#f0b84a', '#9a8ff0', '#62aee8', '#e5606a', '#ffffff'];
@@ -26,7 +31,7 @@ const World = {
     window.addEventListener('resize', () => this.resize());
     canvas.addEventListener('mousemove', e => this.pointer(e, false));
     canvas.addEventListener('click', e => this.pointer(e, true));
-    canvas.addEventListener('mouseleave', () => { G.hover = null; });
+    canvas.addEventListener('mouseleave', () => { G.hover = null; G.hoverCat = false; G.hoverBowl = null; });
     let last = performance.now();
     const loop = now => {
       const real = Math.min(0.05, (now - last) / 1000); last = now;
@@ -58,6 +63,16 @@ const World = {
     const r = this.canvas.getBoundingClientRect();
     const wx = ((e.clientX - r.left) * this.dpr - this.ox) / this.scale;
     const wy = ((e.clientY - r.top) * this.dpr - this.oy) / this.scale;
+    // kedi ve mama/su kapları
+    const onCat = Math.abs(wx - Cat.x) <= 9 && wy >= Cat.y - 13 && wy <= Cat.y + 2;
+    const bowl = ['food', 'water'].find(k => { const b = BOWL[k]; return wx >= b.tx * T + 1 && wx <= b.tx * T + 15 && wy >= b.ty * T + 5 && wy <= b.ty * T + 15; });
+    G.hoverCat = onCat; G.hoverBowl = bowl || null;
+    if (onCat || bowl) {
+      G.hover = null;
+      this.canvas.style.cursor = 'pointer';
+      if (click) { if (onCat) Cat.pet(null); else Fun.fill(bowl); }
+      return;
+    }
     let hit = null;
     for (const a of G.agents) {
       if (!a.visible) continue;
@@ -76,6 +91,9 @@ const World = {
     G.agents = [];
     for (const k of Object.keys(SPOTS)) { const v = SPOTS[k]; (Array.isArray(v) ? v : [v]).forEach(s => { s.by = null; s.owner = null; }); }
     TIMERS.length = 0; this.hooks = []; G.selected = null; G.hover = null; this.confetti = []; this.zzz = [];
+    this.hearts = []; this.notes = []; this.laser = null; this.pizzaUntil = 0; this.pizzaSlices = 0;
+    Cat.onDesk = null; Cat.perched = false; Cat.hop = null; Cat.path = []; Cat.state = 'sit'; Cat.until = G.time + 2; Cat.need = null;
+    Fun.refill = null;
     this.board = { title: 'Görevler', items: [] };
   },
 
@@ -84,22 +102,49 @@ const World = {
     for (let i = TIMERS.length - 1; i >= 0; i--) if (TIMERS[i].at <= G.time) { const t = TIMERS[i]; TIMERS.splice(i, 1); t.res(); }
     for (const a of G.agents) a.update(dt);
     Cat.update(dt);
-    if (Cat.say && G.time > Cat.say.until) Cat.say = null;
+    Fun.update(dt);
     const before = G.agents.length;
     G.agents = G.agents.filter(a => !a.removed);
     if (G.selected && G.selected.removed) G.selected = null;
     if (before !== G.agents.length && window.UI) UI.renderTeam(true);
     for (const h of this.hooks) h(dt);
     this.serverBusy = G.agents.some(a => a.seated && a.screen === 'term');
+    this.ambientSounds(dt);
     // uyuyanlardan "z" yükselsin
     for (const a of G.agents) if (a.sleeping && a.visible && Math.random() < dt * 0.9) this.zzz.push({ x: a.x + (a.pose === 'lie' ? -8 : 2), y: a.y - (a.pose === 'lie' ? 10 : 22), t: G.time });
     this.zzz = this.zzz.filter(z => G.time - z.t < 2.6);
     for (const p of this.confetti) { p.t += dt; p.vy += 60 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
     this.confetti = this.confetti.filter(p => p.t < p.life);
+    this.hearts = this.hearts.filter(h => G.time - h.t < 1.8);
+    // kulaklıkla müzik dinleyenlerin üstünde notalar (ses bize gelmez)
+    for (const a of G.agents) if (a.music && a.visible && Math.random() < dt * 1.2) this.notes.push({ x: a.x + rand(-6, 6), y: a.y - 24, t: G.time, c: pick(['#9a8ff0', '#62aee8', '#e07a55', '#5fc9a8']) });
+    this.notes = this.notes.filter(n => G.time - n.t < 2.4);
+  },
+
+  // daktilo, horlama, atari ve kedi mırlaması
+  ambientSounds(dt) {
+    if (!G.sound) return;
+    for (const a of G.agents) {
+      if (!a.visible) continue;
+      if (a.seated && a.typing && !a.sleeping) {
+        a.typeT = (a.typeT == null ? rand(0, 1.5) : a.typeT) - dt;
+        if (a.typeT <= 0) { Sfx.type(a); a.typeT = rand(1.2, 3.2); }
+      } else if (a.sleeping) {
+        a.snoreT = (a.snoreT == null ? rand(2, 8) : a.snoreT) - dt;
+        if (a.snoreT <= 0) { Sfx.snore(a); a.snoreT = rand(7, 15); }
+      } else if (a.spot === SPOTS.arcade[0] && a.pose === 'stand') {
+        a.arcT = (a.arcT == null ? 0.5 : a.arcT) - dt;
+        if (a.arcT <= 0) { Sfx.arcade(); a.arcT = rand(2.5, 5); }
+      }
+    }
+    if (Cat.state === 'sleep') {
+      this.purrT = (this.purrT == null ? rand(15, 30) : this.purrT) - dt;
+      if (this.purrT <= 0) { Sfx.purr(Cat.x); this.purrT = rand(25, 50); }
+    }
   },
 
   nightLevel() {
-    const d = new Date(), h = d.getHours() + d.getMinutes() / 60;
+    const h = dayHour();
     if (h >= 7.5 && h < 17.5) return 0;
     if (h >= 17.5 && h < 19.5) return (h - 17.5) / 2 * 0.42;
     if (h >= 5.5 && h < 7.5) return (7.5 - h) / 2 * 0.42;
@@ -119,8 +164,10 @@ const World = {
     const deskOwner = SPOTS.desks.map(s => s.owner ? {
       screen: s.owner.seated && s.owner.desk === s ? (s.owner.sleeping ? 'off' : s.owner.screen) : 'idle',
       seated: s.by === s.owner && s.owner.seated, phoneRing: s.owner.phoneRing, onPhone: s.owner.phone && s.owner.seated,
+      duck: s.owner.duckUntil > G.time, catScreen: s.owner.catScreen > G.time && s.owner.seated,
     } : (s.by && s.by.pose === 'sit' ? { screen: 'idle', seated: true } : null));
-    const ctx = { deskOwner, serverBusy: this.serverBusy, printing: this.printing, coffeeBrew: this.coffeeBrew, lobbyRing: this.lobbyRing };
+    const ctx = { deskOwner, serverBusy: this.serverBusy, printing: this.printing, coffeeBrew: this.coffeeBrew, lobbyRing: this.lobbyRing,
+      bowls: this.bowls, pizza: this.pizzaUntil > t ? this.pizzaSlices : 0 };
 
     const list = [];
     for (const f of FURN) {
@@ -128,7 +175,7 @@ const World = {
       list.push({ d: (f.y + f.h) * T, f });
     }
     for (const a of G.agents) if (a.visible) list.push({ d: a.y + (a.pose === 'lie' || a.pose === 'bean' ? 8 : 0) + (a.pose === 'sit' ? 0.5 : 0), a });
-    list.push({ d: Cat.y + 0.2, cat: true });
+    list.push({ d: Cat.depth(), cat: true });
     list.sort((p, q) => p.d - q.d);
     for (const it of list) {
       if (it.f) drawFurniture(g, it.f, t, ctx);
@@ -144,6 +191,32 @@ const World = {
       }
     }
     for (const p of this.confetti) R(g, p.x, p.y, (p.t * 10 | 0) % 2 ? 2 : 1, 2, p.c);
+    // lazer noktası
+    if (this.laser) {
+      const lx = this.laser.x, ly = this.laser.y;
+      g.globalAlpha = 0.25; R(g, lx - 3, ly - 3, 7, 7, '#ff3b3b'); g.globalAlpha = 0.5; R(g, lx - 2, ly - 2, 5, 5, '#ff3b3b'); g.globalAlpha = 1;
+      R(g, lx - 1, ly - 1, 3, 3, '#ff4646'); R(g, lx, ly - 1, 1, 1, '#ffe0e0');
+    }
+    // kalpler ve müzik notaları
+    for (const h of this.hearts) {
+      const k = (G.time - h.t) / 1.8; if (k < 0) continue;
+      const hx = Math.round(h.x + Math.sin(k * 7 + h.x) * 2), hy = Math.round(h.y - k * 14);
+      R(g, hx - 2, hy, 2, 2, '#ff6b8a'); R(g, hx + 1, hy, 2, 2, '#ff6b8a'); R(g, hx - 1, hy + 1, 3, 2, '#ff6b8a'); R(g, hx, hy + 3, 1, 1, '#ff6b8a');
+    }
+    for (const n of this.notes) {
+      const k = (G.time - n.t) / 2.4;
+      const nx = Math.round(n.x + Math.sin(k * 6 + n.x) * 3), ny = Math.round(n.y - k * 16);
+      g.globalAlpha = 1 - k; R(g, nx, ny, 1, 5, n.c); R(g, nx - 2, ny + 4, 3, 2, n.c); R(g, nx + 1, ny, 2, 1, n.c); g.globalAlpha = 1;
+    }
+    // alt ajan ↔ ana ajan bağlantısı (biri seçiliyse ya da üzerine gelinmişse)
+    for (const a of G.agents) {
+      const p = a.parentAgent;
+      if (a.kind !== 'sub' || !p || !a.visible || !p.visible || p.removed) continue;
+      const on = [a, p].includes(G.selected) || [a, p].includes(G.hover);
+      if (!on) continue;
+      const x0 = a.x, y0 = a.y - 12, x1 = p.x, y1 = p.y - 12, n = Math.max(1, Math.floor(Math.hypot(x1 - x0, y1 - y0) / 3));
+      for (let i = 0; i <= n; i += 2) R(g, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, 1, 1, '#62aee8');
+    }
     // durum ikonları
     for (const a of G.agents) {
       if (!a.visible || !a.icon) continue;
@@ -234,11 +307,19 @@ const World = {
       const sel = a === G.selected || a === G.hover;
       if (a.sleeping && !sel) continue;
       const [nx, ny] = this.toScreen(a.x, a.y + (a.pose === 'sit' ? 9 : 2));
-      const label = sel && a.role ? `${a.name} · ${shortText(a.role, 40)}` : (a.short || a.name);
+      let label = sel && a.role ? `${a.name} · ${shortText(a.role, 40)}` : (a.short || a.name);
+      if (a.kind === 'sub') label = '↳ ' + label;
       const w = c.measureText(label).width + 8 * px;
       c.globalAlpha = sel ? 0.95 : 0.72;
       c.fillStyle = '#15131f'; c.fillRect(nx - w / 2, ny, w, fsN + 4 * px);
       c.fillStyle = sel ? '#ffffff' : a.color; c.fillText(label, nx, ny + 2 * px);
+    }
+    if (G.hoverCat || G.hoverBowl) {
+      const label = G.hoverCat ? Cat.label() : G.hoverBowl === 'food' ? `Mama kabı · %${Math.round(this.bowls.food * 100)} (tıkla: doldur)` : `Su kabı · %${Math.round(this.bowls.water * 100)} (tıkla: tazele)`;
+      const [nx, ny] = G.hoverCat ? this.toScreen(Cat.x, Cat.y + 3) : this.toScreen(BOWL[G.hoverBowl].tx * T + 8, BOWL[G.hoverBowl].ty * T + 16);
+      const w = c.measureText(label).width + 8 * px;
+      c.globalAlpha = 0.95; c.fillStyle = '#15131f'; c.fillRect(nx - w / 2, ny, w, fsN + 4 * px);
+      c.fillStyle = '#ffd08a'; c.fillText(label, nx, ny + 2 * px);
     }
     c.globalAlpha = 1; c.textAlign = 'left';
     // konuşma balonları

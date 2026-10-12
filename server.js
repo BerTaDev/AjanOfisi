@@ -8,7 +8,7 @@ const path = require('path');
 const os = require('os');
 
 const PORT = Number(process.env.AJAN_OFISI_PORT || 4777);
-const ROOT = path.join(os.homedir(), '.claude', 'projects');
+const ROOT = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
 const WINDOW_MS = 10 * 60 * 60 * 1000;   // son 10 saatte dokunulan oturumlar ofiste görünür
 const BOOT_TAIL = 768 * 1024;            // ilk açılışta dosyanın son kısmını oku
 const IDLE_MS = 25 * 1000;               // araç beklemiyorsa ve 25 sn ses yoksa: mola
@@ -17,6 +17,7 @@ const SUB_STALE_MS = 8 * 60 * 1000;      // destek ajanı 8 dk sessizse gitmiş 
 const LONG_TOOLS = /^(Bash|PowerShell|Agent|Task|WebSearch|WebFetch|Monitor|Workflow|mcp__)/;
 
 const files = new Map();    // dosya yolu -> izleme bilgisi
+const ignored = new Map();  // eski dosya -> bir sonraki kontrol zamanı
 const sessions = new Map(); // oturum/ajan id -> durum
 const clients = new Set();
 let firstScanDone = false;
@@ -47,6 +48,10 @@ function toolDetail(name, input) {
   if (n === 'WebSearch') return short(input.query, 60);
   if (n === 'WebFetch') { try { return new URL(input.url).host; } catch (e) { return short(input.url, 50); } }
   if (n === 'Agent' || n === 'Task') return short(input.description || input.prompt, 60);
+  if (n === 'Workflow') {
+    const m = /name:\s*['"]([^'"]+)['"]/.exec(input.script || '');
+    return short(input.name || (m && m[1]) || (input.scriptPath && base(input.scriptPath)) || 'workflow', 50);
+  }
   if (n === 'TodoWrite') return (input.todos || []).length + ' madde';
   if (n === 'Skill') return short(input.skill, 40);
   if (n === 'Artifact') return short(input.action || 'publish', 30);
@@ -87,6 +92,7 @@ function getSession(id, info) {
     s = {
       id, sub: !!info.sub, parent: info.parent || null,
       title: '', project: '', model: '', agentType: info.agentType || '', description: info.description || '',
+      phase: info.phase || '', workflow: info.workflow || '',
       status: 'idle', lastTs: 0, idleSince: 0, lastAction: '', lastPrompt: '', todos: [],
       pending: new Map(), done: false, tools: 0, file: info.file
     };
@@ -98,7 +104,7 @@ function getSession(id, info) {
 function pub(s) {
   return {
     id: s.id, sub: s.sub, parent: s.parent, title: s.title, project: s.project, model: s.model,
-    agentType: s.agentType, description: s.description, status: s.status, lastTs: s.lastTs,
+    agentType: s.agentType, description: s.description, phase: s.phase, workflow: s.workflow, status: s.status, lastTs: s.lastTs,
     idleSince: s.idleSince, lastAction: s.lastAction, lastPrompt: s.lastPrompt, todos: s.todos,
     done: s.done, tools: s.tools
   };
@@ -195,9 +201,11 @@ function handleLine(s, o, quiet) {
 // ---------- dosya izleme ----------
 function track(file, info) {
   if (files.has(file)) return;
+  if ((ignored.get(file) || 0) > now()) return;
   let st;
   try { st = fs.statSync(file); } catch (e) { return; }
-  if (now() - st.mtimeMs > WINDOW_MS) return;
+  if (now() - st.mtimeMs > WINDOW_MS) { ignored.set(file, now() + 60000); return; }
+  ignored.delete(file);
   const f = { file, id: info.id, size: 0, rest: '', info };
   files.set(file, f);
   const s = getSession(info.id, Object.assign({ file }, info));
@@ -253,22 +261,30 @@ function scan() {
         const id = e.name.slice(0, -6);
         track(path.join(dp, e.name), { id, sub: false });
       } else if (e.isDirectory() && /^[0-9a-f-]{36}$/i.test(e.name)) {
-        const subDir = path.join(dp, e.name, 'subagents');
-        let subs = [];
-        try { subs = fs.readdirSync(subDir); } catch (err) { continue; }
-        for (const sf of subs) {
-          const m = /^agent-(.+)\.jsonl$/.exec(sf);
-          if (!m) continue;
-          const full = path.join(subDir, sf);
-          if (files.has(full)) continue;
-          let meta = {};
-          try { meta = JSON.parse(fs.readFileSync(path.join(subDir, `agent-${m[1]}.meta.json`), 'utf8')); } catch (err) { /* meta yok */ }
-          track(full, { id: 'sub-' + m[1], sub: true, parent: e.name, agentType: meta.agentType || 'general-purpose', description: meta.description || '' });
-        }
+        walkSubs(path.join(dp, e.name, 'subagents'), e.name, 0);
       }
     }
   }
   firstScanDone = true;
+}
+
+function walkSubs(dir, parent, depth) {
+  let ents = [];
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) { return; }
+  for (const ent of ents) {
+    if (ent.isDirectory()) { if (depth < 4) walkSubs(path.join(dir, ent.name), parent, depth + 1); continue; }
+    const m = /^agent-(.+)\.jsonl$/.exec(ent.name);
+    if (!m) continue;
+    const full = path.join(dir, ent.name);
+    if (files.has(full) || (ignored.get(full) || 0) > now()) continue;
+    let meta = {};
+    try { meta = JSON.parse(fs.readFileSync(path.join(dir, `agent-${m[1]}.meta.json`), 'utf8')); } catch (err) { /* meta yok */ }
+    const wf = /workflows[\\/]([^\\/]+)/.exec(dir);
+    track(full, {
+      id: 'sub-' + m[1], sub: true, parent, agentType: meta.agentType || 'general-purpose', description: meta.description || '',
+      phase: meta.workflowPhase || '', workflow: wf ? wf[1] : '',
+    });
+  }
 }
 
 function poll() {
@@ -313,7 +329,7 @@ function tick() {
 }
 
 // ---------- http ----------
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+const MIME = { '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.json': 'application/json', '.md': 'text/markdown; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -332,6 +348,13 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify([...sessions.values()].filter(s => !s.hidden).map(pub)));
     return;
   }
+  if (url.pathname === '/sfx/index.json') {
+    let list = [];
+    try { list = fs.readdirSync(path.join(__dirname, 'sfx')).filter(f => /\.(ogg|mp3|wav)$/i.test(f)); } catch (e) { /* klasör yok */ }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+    res.end(JSON.stringify(list));
+    return;
+  }
   let p = decodeURIComponent(url.pathname);
   if (p === '/') p = '/index.html';
   const fp = path.join(__dirname, path.normalize(p).replace(/^([\\/])+/, ''));
@@ -341,6 +364,14 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(data);
   });
+});
+
+server.on('error', e => {
+  if (e.code === 'EADDRINUSE') {
+    console.log(`Ajan Ofisi zaten açık: http://localhost:${PORT}`);
+    process.exit(0);
+  }
+  throw e;
 });
 
 scan();

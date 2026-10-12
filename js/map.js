@@ -24,7 +24,7 @@ for (let y = 0; y < ROWS; y++) {
 const DESKS = [
   [11, 5], [13, 5], [17, 5], [19, 5],
   [11, 10], [13, 10], [17, 10], [19, 10],
-  [11, 14], [19, 14],
+  [11, 14], [13, 14], [17, 14], [19, 14],
 ];
 const FURN = [
   { type: 'whiteboard', x: 2, y: 0, w: 5, h: 2 },
@@ -60,6 +60,9 @@ const FURN = [
   { type: 'sleepbag', x: 2, y: 15, w: 2, h: 1 },
   { type: 'arcade', x: 6, y: 15, w: 1, h: 1, block: 1 },
   { type: 'catbed', x: 4, y: 16, w: 1, h: 1 },
+  { type: 'cattree', x: 1, y: 13, w: 1, h: 1, block: 1 },
+  { type: 'bowlFood', x: 26, y: 8, w: 1, h: 1 },
+  { type: 'bowlWater', x: 27, y: 8, w: 1, h: 1 },
   { type: 'plant', x: 8, y: 16, w: 1, h: 1, block: 1 },
 ];
 DESKS.forEach(([x, y], i) => FURN.push({ type: 'desk', x, y, w: 2, h: 1, block: 1, idx: i }));
@@ -102,8 +105,18 @@ const SPOTS = {
   reception: [tileSpot(23, 13, 'right'), tileSpot(27, 13, 'left'), tileSpot(23, 14, 'right'), tileSpot(27, 14, 'left')],
 };
 
+// salondaki laptop yerleri uyku yerleriyle aynı koltuğu/pufu paylaşır
+SPOTS.laptop = [
+  { tx: 2, ty: 11, x: 3 * T, y: 10 * T + 12, dir: 'down', pose: 'sitDown', noChair: true, by: null, laptop: true },
+  { tx: 5, ty: 11, x: 5 * T, y: 10 * T + 12, dir: 'down', pose: 'sitDown', noChair: true, by: null, laptop: true },
+  { tx: 7, ty: 11, x: 7 * T + 8, y: 11 * T + 12, dir: 'down', pose: 'bean', noChair: true, by: null, laptop: true },
+  { tx: 7, ty: 13, x: 7 * T + 8, y: 13 * T + 12, dir: 'down', pose: 'bean', noChair: true, by: null, laptop: true },
+];
+SPOTS.laptop.forEach((s, i) => { s.twin = SPOTS.sleep[i]; SPOTS.sleep[i].twin = s; });
+const twinFree = (s, agent) => !s.twin || ((!s.twin.by || s.twin.by === agent) && (!s.twin.owner || s.twin.owner === agent));
+
 function freeSpot(list, agent) {
-  const free = list.filter(s => !s.by || s.by === agent);
+  const free = list.filter(s => (!s.by || s.by === agent) && twinFree(s, agent));
   return free.length ? pick(free) : null;
 }
 function claim(spot, agent) {

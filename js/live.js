@@ -7,7 +7,7 @@ const TOOL_LOOK = [
   [/^(Bash|PowerShell|Monitor|BashOutput|KillShell)$/, 'term', 'term'],
   [/^(WebSearch|WebFetch)$|Browser|chrome/i, 'web', 'globe'],
   [/^(TodoWrite|Task(Create|Update|List)|Skill)$/, 'code', 'note'],
-  [/^(Agent|Task)$/, 'chat', 'phone'],
+  [/^(Agent|Task|Workflow)$/, 'chat', 'phone'],
 ];
 function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return Math.abs(h); }
 
@@ -16,7 +16,7 @@ const Live = {
   nextBanter: 0, boardFrom: null,
 
   url() {
-    if (location.protocol.startsWith('http') && location.port === '4777') return '/events';
+    if (location.protocol.startsWith('http')) return '/events';
     return 'http://localhost:4777/events';
   },
 
@@ -88,7 +88,15 @@ const Live = {
         break;
       case 'tool': this.onTool(r, ev); break;
       case 'tool_done':
-        if (ev.error) { a.setIcon('excl', '#e5606a', 2); if (G.time - (r.errAt || -99) > 25) { r.errAt = G.time; if (!a.bubble) a.say(pick(['Hmm, hata verdi.', 'Olmadı, başka yol deneyeyim.', 'Bu beklediğim çıktı değil.'])); } }
+        if (ev.error) {
+          a.setIcon('excl', '#e5606a', 2); Sfx.error(a.x);
+          if (G.time - (r.errAt || -99) > 25) {
+            r.errAt = G.time;
+            // ara sıra masaya lastik ördek gelir
+            if (a.seated && G.time - (r.duckAt || -99) > 90 && chance(0.6)) { r.duckAt = G.time; a.duckUntil = G.time + 15; if (!a.bubble) a.say(pick(['Lastik ördek, dinle: bu fonksiyon neden null dönüyor?', 'Ördeğe anlatırken hatayı buldum!', 'Lastik ördek her şeyi bilir.', 'Ördek, sence bu bir yarış durumu mu?'])); }
+            else if (!a.bubble) a.say(pick(['Hmm, hata verdi.', 'Olmadı, başka yol deneyeyim.', 'Bu beklediğim çıktı değil.']));
+          }
+        }
         break;
       case 'say':
         this.toWork(r);
@@ -115,10 +123,16 @@ const Live = {
     let r = this.recs.get(s.id);
     if (r) { r.s = Object.assign(r.s, s); this.applyNames(r); return; }
     if (s.sub && s.done) return;
-    const a = new Agent({ id: s.id, kind: s.sub ? 'sub' : 'main', seed: hashStr(s.id) % 100000 });
+    const seed = hashStr(s.id) % 100000;
+    const parent = s.sub && s.parent && this.recs.get(s.parent) ? this.recs.get(s.parent).agent : null;
+    const a = new Agent({ id: s.id, kind: s.sub ? 'sub' : 'main', seed, look: parent ? makeLook(seed, parent.look.shirt) : undefined });
+    a.parentAgent = parent;
+    a.prefLaptop = !s.sub && seed % 5 === 0;
     r = { id: s.id, s, agent: a, todos: (s.todos || []).map(t => ({ text: t.text, status: t.status })), mode: '' };
     a.rec = r;
     this.recs.set(s.id, r);
+    // ana ajan sonradan geldiyse bekleyen alt ajanları ona bağla
+    if (!s.sub) for (const x of this.recs.values()) if (x.s.sub && x.s.parent === s.id && !x.agent.parentAgent) x.agent.parentAgent = a;
     this.applyNames(r);
     World.add(a);
     if (r.todos.length) this.boardFrom = r;
@@ -129,8 +143,11 @@ const Live = {
   applyNames(r) {
     const s = r.s, a = r.agent;
     if (s.sub) {
-      a.name = SUB_NAMES[s.agentType] || s.agentType || 'Destek';
-      a.role = shortText(s.description || 'Destek ajanı', 46);
+      a.name = s.agentType === 'workflow-subagent' ? (s.description || 'Workflow ajanı') : (SUB_NAMES[s.agentType] || s.agentType || 'Destek');
+      const same = [...this.recs.values()].filter(x => x !== r && x.s.sub && x.s.parent === s.parent && (SUB_NAMES[x.s.agentType] || x.s.agentType) === a.name);
+      if (same.length && !r.num) r.num = same.length + 1;
+      if (r.num) a.name += ' ' + r.num;
+      a.role = s.agentType === 'workflow-subagent' ? ['Workflow', s.phase].filter(Boolean).join(' · ') : shortText(s.description || 'Destek ajanı', 46);
     } else {
       a.name = shortText(s.title || s.project || 'Oturum', 26);
       a.role = [s.model, s.project].filter(Boolean).join(' · ');
@@ -184,10 +201,11 @@ const Live = {
         await api.wait(p && p.phone ? 1.5 : 0.3);
         await a.arrive(api, p && p.desk ? Demo.nearDesk(p) : SPOTS.reception[0]);
         a.wave = true;
-        await api.say(`Merhaba! ${a.role} için geldim.`, 2.6);
+        await api.say(r.s.agentType === 'workflow-subagent' ? `Merhaba! Ben ${a.name}, workflow ekibine katılıyorum.` : `Merhaba! ${a.role} için geldim.`, 2.6);
         a.wave = false;
         if (p && !p.sleeping) p.say(pick(['Hoş geldin, sana bırakıyorum.', 'Süper, detaylar sende.', 'Tam zamanında!']));
         await api.wait(1.8);
+        a.needDesk(p && p.desk);
         await a.goWork(api);
         a.screen = 'code'; a.setStatus('working');
       });
@@ -227,7 +245,15 @@ const Live = {
     if (a.status !== 'waiting') a.setStatus('working');
     a.setIcon(icon, '#2a1f2a', 2.5);
     a.logAction(ev.detail ? `${ev.label} · ${ev.detail}` : ev.label);
-    if (/^(Write|NotebookEdit)$/.test(ev.tool)) World.printing = G.time + 2.5;
+    if (/^(Write|NotebookEdit)$/.test(ev.tool)) { World.printing = G.time + 2.5; Sfx.printer(); }
+    if (ev.tool === 'Workflow') {
+      a.phone = true; a.phoneRing = 0;
+      a.setIcon('phone', '#2a1f2a', 3.5);
+      World.lobbyRing = G.time + 2.6;
+      Sfx.ring();
+      a.say(`Alo destek? Bir ekip lazım: ${ev.detail || 'workflow'}`, 'shout', 3.6);
+      TIMERS.push({ at: G.time + 3.6, res: () => { a.phone = false; } });
+    }
     if (ev.tool === 'Agent' || ev.tool === 'Task') {
       a.phone = true; a.phoneRing = 0;
       a.setIcon('phone', '#2a1f2a', 3);
@@ -248,13 +274,16 @@ const Live = {
       a.setStatus('waiting', 'Onay bekliyor: ' + (a.action || ''));
       a.screen = 'wait';
       a.setIcon('quest', '#c27c0e');
+      Sfx.question(a.x);
       a.say('Devam etmek için onayını bekliyorum…', 'shout', 4);
     } else if (st === 'idle') {
       a.clearIcon();
       a.typing = false; a.screen = 'idle';
       a.setIcon('check', '#3aa070', 3);
+      Sfx.done(a.x);
       a.setStatus('idle', 'Tur bitti, yeni görev bekliyor');
-      this.idleLoop(r, 180);
+      if (G.agents.some(c => c.kind === 'sub' && c.parentAgent === a && !c.removed)) { r.mode = 'idle'; r.supervising = false; this.supervise(); }
+      else this.idleLoop(r, 180);
     } else if (st === 'done' && r.s.sub) this.subLeave(r);
   },
 
@@ -263,15 +292,16 @@ const Live = {
     const a = r.agent;
     r.mode = 'idle';
     const t0 = G.time;
+    // gece işi olmayan ya hemen kestirir ya da uzun uzun takılır
+    const night = World.nightLevel() > 0.3;
+    if (night) untilSleep = chance(0.5) ? 30 : rand(240, 480);
     a.run(async api => {
-      if (a.seated) await api.wait(rand(15, 25));
-      await Demo.coffee(a, api);
+      if (a.seated) await api.wait(rand(10, 20));
+      if (!night || chance(0.4)) await Demo.coffee(a, api);
       while (G.time - t0 < untilSleep) {
-        const roll = Math.random();
-        if (roll < 0.3) await Demo.visit(a, api, SPOTS.lounge, null, 'Dinleniyor');
-        else if (roll < 0.5) await Demo.visit(a, api, SPOTS.windowSpot, L.window, 'Pencereden bakıyor');
-        else if (roll < 0.65) await Demo.visit(a, api, SPOTS.arcade, L.arcade, 'Atari oynuyor');
-        else await Demo.visit(a, api, SPOTS.kitchen, null, 'Mutfakta');
+        let act = Hangout.pick();
+        if (act === 'nap' || act === 'coffee') act = night ? pick(['music', 'game']) : 'lounge';
+        await Hangout.run(act, a, api);
         await api.wait(rand(2, 5));
       }
       a.mug = false;
@@ -279,6 +309,14 @@ const Live = {
       r.mode = 'sleep';
       await a.sleepSomewhere(api, true);
     });
+  },
+
+  // kedi işi gibi kısa bir görevden dönen ajanı eski hâline al
+  resume(a, wasAsleep) {
+    const r = a.rec;
+    if (!this.active || !r || r.mode !== 'errand') return;
+    if (wasAsleep) { r.mode = 'sleep'; a.run(async api => { await a.sleepSomewhere(api, true); }); }
+    else this.idleLoop(r, rand(60, 150));
   },
 
   subLeave(r) {
@@ -291,7 +329,7 @@ const Live = {
       a.setIcon('check', '#3aa070', 3);
       if (p && !p.removed) {
         await api.go(p.desk ? Demo.nearDesk(p) : Demo.adjacent(p));
-        await api.say(`İşim bitti: ${shortText(a.role, 60)}. Rapor sende.`, 3);
+        await api.say(`İşim bitti: ${r.s.agentType === 'workflow-subagent' ? a.name : shortText(a.role, 60)}. Rapor sende.`, 3);
         if (!p.sleeping) p.say(pick(L.thanks));
         await api.wait(1.8);
       }
@@ -335,8 +373,35 @@ const Live = {
   },
 
   // ajanlar arası küçük sohbetler (gerçek verilerden)
+  // alt ajanları çalışan ana ajan uyumaz: masasında ekibini bekler
+  supervise() {
+    for (const r of this.recs.values()) {
+      if (r.s.sub || r.mode === 'leaving') continue;
+      const a = r.agent;
+      const kids = G.agents.filter(c => c.kind === 'sub' && c.parentAgent === a && !c.removed && c.rec && c.rec.mode !== 'leaving').length;
+      if (kids && (r.mode === 'sleep' || r.mode === 'idle')) {
+        r.mode = 'work'; r.supervising = true;
+        a.run(async api => {
+          if (a.sleeping) await a.wakeUp(api, pick(['Ekibim çalışıyor, başlarında durayım.', 'Alt ajanlar iş başında, ben de kalkayım.']));
+          a.mug = false;
+          await a.goWork(api);
+          a.screen = 'chat'; a.typing = false;
+          a.setStatus('supervise', `Ekibini bekliyor (${kids} alt ajan)`);
+        });
+      } else if (kids && r.supervising && !['working', 'thinking', 'waiting'].includes(a.status) && a.pose !== 'walk') {
+        a.setStatus('supervise', `Ekibini bekliyor (${kids} alt ajan)`);
+        if (a.seated) a.screen = 'chat';
+      } else if (!kids && r.supervising) {
+        r.supervising = false;
+        if (r.s.status === 'idle') this.idleLoop(r, 180);
+      }
+    }
+  },
+
   tick() {
-    if (!this.active || G.time < this.nextBanter) return;
+    if (!this.active) return;
+    if (G.time >= (this.nextSupervise || 0)) { this.nextSupervise = G.time + 2; this.supervise(); }
+    if (G.time < this.nextBanter) return;
     this.nextBanter = G.time + rand(28, 50);
     const awake = G.agents.filter(a => a.visible && !a.sleeping && !a.removed && a.pose !== 'walk' && !a.bubble);
     if (awake.length < 2) return;

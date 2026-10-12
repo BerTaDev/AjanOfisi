@@ -9,6 +9,7 @@ const STATUS = {
   thinking: { label: 'Düşünüyor', col: 'var(--work)' },
   waiting: { label: 'Onay bekliyor', col: 'var(--wait)' },
   meeting: { label: 'Toplantıda', col: 'var(--sub)' },
+  supervise: { label: 'Ekibi yönetiyor', col: 'var(--sub)' },
   phone: { label: 'Telefonda', col: 'var(--wait)' },
   break: { label: 'Molada', col: 'var(--rest)' },
   idle: { label: 'Boşta', col: 'var(--muted)' },
@@ -49,11 +50,13 @@ class Agent {
     this.pose = spot.pose || 'stand';
     if (spot.by !== undefined) claim(spot, this);
     this.seated = this.pose === 'sit' && spot === this.desk;
+    this.laptop = spot === this.desk && !SPOTS.desks.includes(spot);
   }
   tile() { return { tx: clamp(Math.floor(this.x / T), 0, COLS - 1), ty: clamp(Math.floor((this.y - 2) / T), 0, ROWS - 1) }; }
 
   walkTo(target, done) {
     this.seated = false; this.typing = false; this.phone = false; this.armsUp = false;
+    this.laptop = false; this.handheld = false; this.music = false; this.headphones = false; this.rage = 0; this.slice = false;
     if (this.sleeping) this.sleeping = false;
     if (target.by !== undefined) claim(target, this); else release(this);
     let { tx, ty } = this.tile();
@@ -94,7 +97,7 @@ class Agent {
     const d = dur || clamp(1.6 + text.length * 0.055, 2.4, 7);
     this.bubble = { text, kind: kind || 'say', born: G.time, until: G.time + d };
     this.lastSpoke = G.time;
-    Sfx.pop();
+    Sfx.say(this, text, kind);
     if (window.UI) UI.chat(this, text, kind || 'say');
   }
   setIcon(name, col, dur, bg) { this.icon = { name, col: col || '#2a1f2a', bg, until: dur ? G.time + dur : Infinity }; }
@@ -123,12 +126,13 @@ class Agent {
         else this.dir = dy > 0 ? 'down' : 'up';
       }
       this.ft += dt;
-      if (this.ft > 0.13) { this.ft = 0; this.frame++; }
+      if (this.ft > 0.13) { this.ft = 0; this.frame++; if (this.frame % 2 === 0 && this.visible) Sfx.step(this); }
       if (!this.path.length) {
         const tg = this._target || {};
         this.pose = tg.pose || 'stand';
         this.dir = tg.dir || this.dir;
         this.seated = this.pose === 'sit' && tg === this.desk;
+        Sfx.arrive(this, tg);
         const cb = this._arrive; this._arrive = null;
         if (cb) cb();
       }
@@ -138,10 +142,19 @@ class Agent {
   }
 
   // ---- hazır davranışlar ----
-  needDesk() {
+  needDesk(near) {
     if (this.desk) return this.desk;
+    if (this.prefLaptop && !near) {
+      // bazıları puf minderde laptopla çalışmayı sever
+      const l = SPOTS.laptop.find(s => !s.by && !s.owner && twinFree(s, this));
+      if (l) { l.owner = this; this.desk = l; return l; }
+    }
     const free = SPOTS.desks.filter(s => !s.by && !s.owner);
-    const d = (free.length ? pick(free) : null) || SPOTS.meetBottom.concat(SPOTS.meetTop).find(s => !s.by && !s.owner);
+    const nearTo = near || (this.parentAgent && this.parentAgent.desk);
+    if (nearTo && free.length) free.sort((p, q) => dist(p, nearTo) - dist(q, nearTo));
+    const d = (free.length ? (nearTo ? free[0] : pick(free)) : null)
+      || SPOTS.laptop.find(s => !s.by && !s.owner && twinFree(s, this))
+      || SPOTS.meetTop.concat(SPOTS.meetBottom).find(s => !s.by && !s.owner);
     if (d) { d.owner = this; this.desk = d; }
     return d;
   }
@@ -153,6 +166,7 @@ class Agent {
     if (!d) return;
     if (!this.atDesk()) await api.go(d);
     this.seated = true; this.pose = d.pose; this.dir = d.dir;
+    this.laptop = !SPOTS.desks.includes(d);
   }
 
   async sleepSomewhere(api, allowDesk) {
@@ -164,7 +178,9 @@ class Agent {
       this.pose = s.pose;
     } else if (allowDesk && this.desk) {
       await this.goWork(api);
-      this.pose = 'deskSleep'; this.sleeping = true; this.setStatus('sleeping', 'Masada sızdı');
+      const lap = !SPOTS.desks.includes(this.desk);
+      this.laptop = false;
+      this.pose = lap ? this.desk.pose : 'deskSleep'; this.sleeping = true; this.setStatus('sleeping', lap ? 'Laptopun başında sızdı' : 'Masada sızdı');
     } else return;
     this.screen = 'off';
   }
@@ -174,7 +190,7 @@ class Agent {
     this.sleeping = false;
     this.setStatus('idle', 'Yeni uyandı');
     this.setIcon('excl', '#e07a55', 1.6);
-    Sfx.wake();
+    Sfx.wake(this.x);
     if (this.pose === 'lie' || this.pose === 'bean' || this.pose === 'deskSleep') {
       const sp = this.spot;
       this.pose = 'stand';
@@ -191,7 +207,7 @@ class Agent {
     if (line) this.say(line);
     this.freeDesk();
     await api.go(SPOTS.door);
-    Sfx.door();
+    Sfx.door(false);
     World.doorOpen = G.time + 2;
     await api.go(SPOTS.outside);
     this.visible = false;
@@ -203,7 +219,7 @@ class Agent {
     this.x = SPOTS.outside.x; this.y = SPOTS.outside.y; this.dir = 'up'; this.visible = true;
     this.setStatus('arriving', 'Kapıdan giriyor');
     World.doorOpen = G.time + 2.5;
-    Sfx.door();
+    Sfx.door(true);
     await api.go(SPOTS.door);
     if (target) await api.go(target);
   }

@@ -30,18 +30,33 @@
   $('btnSupport').addEventListener('click', () => Demo.forceSupport());
   $('btnWake').addEventListener('click', () => Demo.wakeAll());
   $('btnProject').addEventListener('click', () => Demo.skipProject());
-  $('btnSound').addEventListener('click', () => {
-    G.sound = !G.sound;
-    if (G.sound) Sfx.unlock();
-    $('btnSound').textContent = 'Ses: ' + (G.sound ? 'açık' : 'kapalı');
-    $('btnSound').setAttribute('aria-pressed', String(G.sound));
-  });
+  const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* depolama kapalı */ } };
+  const read = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  function setSound(on) {
+    Sfx.setEnabled(on);
+    $('btnSound').textContent = 'Ses: ' + (on ? 'açık' : 'kapalı');
+    $('btnSound').setAttribute('aria-pressed', String(on));
+    store('ajanOfisiSound', on ? '1' : '0');
+  }
+  $('btnSound').addEventListener('click', () => setSound(!G.sound));
+  $('vol').addEventListener('input', e => { Sfx.setVolume(e.target.value / 100); store('ajanOfisiVol', e.target.value); });
+  const savedVol = read('ajanOfisiVol');
+  if (savedVol != null) { $('vol').value = savedVol; Sfx.setVolume(savedVol / 100); }
+  // tarayıcı sesi ancak bir tıklamadan sonra açar: kayıtlı tercih "açık" ise ilk tıklamada başlat
+  if (read('ajanOfisiSound') === '1') {
+    $('btnSound').textContent = 'Ses: açık (tıkla)';
+    window.addEventListener('pointerdown', function first(e) {
+      window.removeEventListener('pointerdown', first, true);
+      if (e.target === $('btnSound')) return;
+      setSound(true);
+    }, true);
+  }
   $('noticeClose').addEventListener('click', () => UI.notice(''));
 
   // köprü üzerinden açıldıysa canlı mod, dosyadan açıldıysa demo ile başla
   let saved = null;
   try { saved = localStorage.getItem('ajanOfisiMode'); } catch (e) { /* */ }
-  const served = location.protocol.startsWith('http') && location.port === '4777';
+  const served = location.protocol.startsWith('http');
   const hash = location.hash.replace('#', '');
   setMode(hash === 'demo' || hash === 'live' ? hash : served ? (saved || 'live') : 'demo');
 })();

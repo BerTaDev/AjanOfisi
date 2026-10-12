@@ -63,7 +63,11 @@ function headParts(X, top, L, dir, closed) {
 
 // a: {x,y,dir,pose,frame,look, typing, phone, mug, wave}
 function drawPerson(g, a, t) {
-  const X = Math.round(a.x), Y = Math.round(a.y), L = a.look;
+  const rage = a.rage > t;
+  const X = Math.round(a.x) + (rage ? (Math.floor(t * 30) % 2 ? 1 : -1) : 0), Y = Math.round(a.y);
+  let L = a.look;
+  if (a.headphones || rage) L = Object.assign({}, L, a.headphones ? { phones: true } : {}, rage ? { skin: '#ec8f7c' } : {});
+  const bobH = a.music ? (Math.floor(t * 4 + (a.seed || 0)) % 2) : 0;
   const sh = L.shirt, sh2 = shade(L.shirt, -0.22), pants = L.pants, shoe = '#2a2230';
   const pose = a.pose || 'stand';
   // gölge
@@ -105,16 +109,18 @@ function drawPerson(g, a, t) {
     // önden oturuş
     const top = Y - 20 + (pose === 'bean' ? 3 : 0);
     const closed = a.sleeping;
-    if (pose === 'sitDown') { R(g, X - 6, Y - 22, 12, 12, '#3a3550'); }
+    if (pose === 'sitDown' && !(a.spot && a.spot.noChair)) { R(g, X - 6, Y - 22, 12, 12, '#3a3550'); }
     const parts = [
       [X - 4, top + 10, 8, 7, sh], [X + 2, top + 10, 2, 7, sh2],
       [X - 6, top + 11, 2, 5, sh], [X + 4, top + 11, 2, 5, sh],
       [X - 4, top + 17, 3, 2, pants], [X + 1, top + 17, 3, 2, pants],
     ];
     if (a.mug) parts.push([X + 4, top + 13, 3, 3, '#f2eee2']);
+    if (a.slice) parts.push([X + 4, top + 12, 3, 3, '#f2c14e'], [X + 4, top + 12, 3, 1, '#c0392b']);
     paint(g, parts);
-    const head = headParts(X, top + (closed ? 1 : 0), L, 'down', closed);
+    const head = headParts(X, top + (closed ? 1 : 0) + bobH, L, 'down', closed);
     paint(g, closed && pose === 'bean' ? head.map(p => { const q = [p[0] + 1, p[1] + 1, p[2], p[3], p[4]]; return q; }) : head);
+    drawHeld(g, a, X, top, t);
     return;
   }
 
@@ -150,58 +156,21 @@ function drawPerson(g, a, t) {
     if (a.mug && !back) parts.push([X + 5, top + 14, 3, 3, '#f2eee2']);
     if (a.phone) parts.push([X + 4, top + 4, 2, 7, sh], [X + 3, top + 4, 3, 4, '#2d2a36']);
     paint(g, parts);
-    paint(g, headParts(X, top, L, back ? 'up' : 'down', a.sleeping));
+    paint(g, headParts(X, top + bobH, L, back ? 'up' : 'down', a.sleeping));
+    if (!back) drawHeld(g, a, X, top, t);
     if (a.badge && !back) { R(g, X - 3, top + 13, 2, 3, '#f2eee2'); R(g, X - 3, top + 13, 2, 1, a.badge); }
   }
 }
 
-// ---------------- ofis kedisi ----------------
-const Cat = {
-  x: 4 * T + 8, y: 16 * T + 10, dir: 'right', state: 'sleep', path: [], until: 0, frame: 0, ft: 0, say: null,
-  update(dt) {
-    this.ft += dt;
-    if (this.path.length) {
-      const n = this.path[0];
-      const dx = n.x - this.x, dy = n.y - this.y, d = Math.hypot(dx, dy);
-      const sp = 22 * dt;
-      if (d <= sp) { this.x = n.x; this.y = n.y; this.path.shift(); }
-      else { this.x += dx / d * sp; this.y += dy / d * sp; if (Math.abs(dx) > 0.3) this.dir = dx > 0 ? 'right' : 'left'; }
-      if (this.ft > 0.14) { this.ft = 0; this.frame++; }
-      if (!this.path.length) { this.state = this.next || 'sit'; this.until = G.time + rand(8, 20); }
-      return;
-    }
-    if (G.time < this.until) return;
-    // yeni hedef: uyuyan birinin yanı, kedi yatağı, mutfak ya da rastgele
-    const sleepers = G.agents.filter(a => a.sleeping && a.visible);
-    let tx, ty, next = 'sit';
-    const roll = Math.random();
-    if (roll < 0.35 && sleepers.length) { const s = pick(sleepers); tx = Math.floor(s.x / T); ty = Math.floor(s.y / T) + 1; next = 'sleep'; }
-    else if (roll < 0.55) { tx = 4; ty = 16; next = 'sleep'; }
-    else if (roll < 0.7) { tx = 26; ty = 4; }
-    else { tx = randi(10, 21); ty = randi(7, 9); }
-    if (ty >= ROWS - 1) ty = ROWS - 2;
-    if (BLOCK[ty] && BLOCK[ty][tx]) { this.until = G.time + 2; return; }
-    const p = findPath(Math.floor(this.x / T), Math.floor(this.y / T), { tx, ty });
-    if (!p) { this.until = G.time + 3; return; }
-    this.path = p.map(n => ({ x: n.tx * T + 8, y: n.ty * T + 10 }));
-    this.state = 'walk'; this.next = next;
-    if (chance(0.25)) this.say = { text: pick(['miyav', 'mrrr', 'miyav?', 'prrr']), until: G.time + 2.5 };
-  },
-  draw(g, t) {
-    const X = Math.round(this.x), Y = Math.round(this.y);
-    const c = '#e09a4f', d = '#b8743a';
-    g.globalAlpha = 0.25; R(g, X - 5, Y - 1, 10, 2, '#000'); g.globalAlpha = 1;
-    let p;
-    if (this.state === 'sleep') {
-      p = [[X - 5, Y - 5, 10, 5, c], [X - 6, Y - 6, 4, 4, c], [X - 6, Y - 7, 1, 1, c], [X - 3, Y - 7, 1, 1, c], [X + 3, Y - 3, 3, 2, d], [X - 1, Y - 5, 2, 1, d], [X + 2, Y - 4, 2, 1, d]];
-    } else {
-      const f = this.state === 'walk' ? this.frame % 2 : 0;
-      p = [[X - 5, Y - 6, 9, 4, c], [X - 4, Y - 2, 1, 2 - f, d], [X - 1, Y - 2, 1, 1 + f, d], [X + 1, Y - 2, 1, 2 - f, d], [X + 3, Y - 2, 1, 1 + f, d],
-        [X + 3, Y - 10, 5, 5, c], [X + 3, Y - 11, 1, 1, c], [X + 7, Y - 11, 1, 1, c], [X + 6, Y - 8, 1, 1, '#2a1f2a'],
-        [X - 7, Y - 9 + (Math.floor(t * 2) % 2), 2, 4, c], [X - 2, Y - 6, 2, 1, d], [X + 1, Y - 6, 1, 1, d]];
-      if (this.state === 'sit') p.push([X - 4, Y - 7, 7, 2, c]);
-    }
-    if (this.dir === 'left') p = mirror(p, X);
-    paint(g, p);
+// kucaktaki laptop ya da eldeki oyun konsolu (önden görünüş)
+function drawHeld(g, a, X, top, t) {
+  if (a.laptop) {
+    paint(g, [[X - 6, top + 12, 12, 7, '#b9b6c6']]);
+    R(g, X - 6, top + 12, 12, 1, '#9fe0ff');
+    R(g, X, top + 15, 1, 1, '#e07a55'); R(g, X - 1, top + 15, 3, 1, 'rgba(224,122,85,0.5)'); R(g, X, top + 14, 1, 3, 'rgba(224,122,85,0.5)');
+  } else if (a.handheld) {
+    paint(g, [[X - 4, top + 13, 8, 4, '#3b3456']]);
+    R(g, X - 2, top + 14, 4, 2, Math.floor(t * 5) % 3 ? '#7fd1a8' : '#f0b84a');
+    R(g, X - 4, top + 14, 1, 1, '#e5606a'); R(g, X + 3, top + 15, 1, 1, '#62aee8');
   }
-};
+}

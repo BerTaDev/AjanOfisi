@@ -110,7 +110,14 @@ const UI = {
   },
 
   renderTeam(force) {
-    const list = G.agents.slice().sort((a, b) => (a.kind === 'sub') - (b.kind === 'sub') || a.uid - b.uid);
+    const rank = a => ({ working: 0, thinking: 0, waiting: 0, phone: 0, supervise: 0, meeting: 1, arriving: 1, done: 1, break: 2, idle: 2, leaving: 3, sleeping: 4 })[a.status] ?? 2;
+    const isChild = a => a.kind === 'sub' && a.parentAgent && !a.parentAgent.removed && G.agents.includes(a.parentAgent);
+    const tops = G.agents.filter(a => !isChild(a)).sort((a, b) => rank(a) - rank(b) || a.uid - b.uid);
+    const list = [];
+    for (const a of tops) {
+      list.push(a);
+      G.agents.filter(c => isChild(c) && c.parentAgent === a).sort((p, q) => p.uid - q.uid).forEach(c => list.push(c));
+    }
     document.getElementById('teamCount').textContent = list.length ? list.length + ' ajan' : '';
     if (!list.length) {
       if (!this.$team.querySelector('.empty')) this.$team.innerHTML = '<li class="empty">Ofis boş. Canlı modda Claude oturumları açıldıkça ajanlar kapıdan girer.</li>';
@@ -137,11 +144,14 @@ const UI = {
       }
       if (this.$team.children[idx] !== r.li) this.$team.insertBefore(r.li, this.$team.children[idx] || null);
       const st = STATUS[a.status] || STATUS.idle;
-      const key = [a.name, a.role, a.status, a.action, a === G.selected, a.sleeping, a.pose].join('|');
+      const kids = G.agents.filter(c => c.kind === 'sub' && c.parentAgent === a).length;
+      const key = [a.name, a.role, a.status, a.action, a === G.selected, a.sleeping, a.pose, kids].join('|');
       if (key !== r.key || force) {
         r.key = key;
-        r.nm.textContent = a.name;
+        r.nm.textContent = (a.kind === 'sub' ? '↳ ' : '') + a.name;
         if (a.role) { const sm = document.createElement('small'); sm.textContent = a.role; r.nm.appendChild(sm); }
+        if (kids) { const k = document.createElement('span'); k.className = 'kids'; k.textContent = `+${kids} alt ajan`; r.nm.appendChild(k); }
+        r.li.classList.toggle('sub', a.kind === 'sub');
         r.chip.textContent = st.label; r.chip.style.background = st.col;
         r.act.textContent = a.action || '—';
         r.li.classList.toggle('sel', a === G.selected);
@@ -157,7 +167,7 @@ const UI = {
     const c = { working: 0, break: 0, sleeping: 0, sub: 0, waiting: 0 };
     for (const a of G.agents) {
       if (a.kind === 'sub') c.sub++;
-      if (['working', 'thinking', 'phone', 'meeting'].includes(a.status)) c.working++;
+      if (['working', 'thinking', 'phone', 'meeting', 'supervise'].includes(a.status)) c.working++;
       else if (a.status === 'sleeping') c.sleeping++;
       else if (a.status === 'waiting') c.waiting++;
       else if (a.status === 'break' || a.status === 'idle') c.break++;

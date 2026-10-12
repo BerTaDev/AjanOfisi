@@ -105,7 +105,7 @@ function skyColors(h) {
 }
 
 function drawWall(g, t, board) {
-  const hour = new Date().getHours() + new Date().getMinutes() / 60;
+  const hour = dayHour();
   const night = hour < 6 || hour >= 19.5;
   for (const f of FURN) {
     const X = f.x * T, Y = f.y * T, w = f.w * T;
@@ -172,6 +172,13 @@ const CODE_COLS = ['#e07a55', '#5fc9a8', '#9a8ff0', '#f0b84a', '#62aee8', '#c9c3
 function drawScreen(g, x, y, w, h, kind, t, seed) {
   const r = mulberry(seed);
   if (kind === 'off') { R(g, x, y, w, h, '#14121c'); R(g, x + 1, y + 1, 3, 1, '#2a2737'); return; }
+  if (kind === 'cat') {
+    // kedi klavyeye bastı: aaaaaaaaaa
+    R(g, x, y, w, h, '#1d1b2c');
+    const n = Math.min(Math.floor(t * 30) % 60, (h - 2) / 2 * (w - 2));
+    for (let i = 0; i < n; i++) R(g, x + 1 + (i % (w - 2)), y + 1 + Math.floor(i / (w - 2)) * 2, 1, 1, '#e9e5da');
+    return;
+  }
   if (kind === 'idle') {
     R(g, x, y, w, h, '#16142a');
     const px = x + 2 + Math.abs(((t * 6 + seed) % (2 * (w - 5))) - (w - 5));
@@ -248,7 +255,7 @@ function drawFurniture(g, f, t, ctx) {
       // monitör
       R(g, X + 14, Y + 4, 5, 2, '#3b3747'); R(g, X + 15, Y, 3, 4, '#4a4658');
       R(g, X + 5, Y - 12, 22, 14, '#2b2838'); R(g, X + 6, Y - 11, 20, 12, '#3b3747');
-      const kind = owner ? owner.screen : 'off';
+      const kind = owner ? (owner.catScreen ? 'cat' : owner.screen) : 'off';
       drawScreen(g, X + 7, Y - 10, 18, 10, kind, t, f.idx * 17 + 3);
       // klavye, kupa, telefon
       R(g, X + 9, Y + 8, 14, 3, '#d8d4e0'); R(g, X + 10, Y + 9, 12, 1, '#b3aec2');
@@ -256,6 +263,12 @@ function drawFurniture(g, f, t, ctx) {
       const ring = owner && owner.phoneRing > t;
       const jig = ring ? (Math.floor(t * 20) % 2) : 0;
       R(g, X + 2 + jig, Y + 5, 5, 4, '#2d2a36'); if (!(owner && owner.onPhone)) R(g, X + 2 + jig, Y + 4, 5, 2, ring ? '#e5606a' : '#4b4659');
+      if (owner && owner.duck) {
+        // lastik ördek: hata ayıklamanın en eski yöntemi
+        const b = Math.floor(t * 3) % 2;
+        paint(g, [[X + 20, Y + 3 - b, 6, 4, '#f6d23a'], [X + 24, Y - b, 4, 4, '#f6d23a']]);
+        R(g, X + 28, Y + 1 - b, 2, 1, '#e8742a'); R(g, X + 26, Y + 1 - b, 1, 1, '#2a1f2a'); R(g, X + 21, Y + 3 - b, 2, 1, '#fbe58a');
+      }
       if (f.idx % 3 === 1) { R(g, X + 24, Y - 2, 4, 3, '#a8644f'); R(g, X + 24, Y - 6, 1, 4, '#5fa86b'); R(g, X + 26, Y - 7, 1, 5, '#5fa86b'); R(g, X + 27, Y - 5, 1, 3, '#4c8f58'); }
       // boş sandalye
       if (!owner || !owner.seated) drawChair(g, X + 16, Y + 35);
@@ -265,6 +278,11 @@ function drawFurniture(g, f, t, ctx) {
       R(g, X + 2, Y + 4, w - 4, h - 6, '#7a5a40'); R(g, X + 3, Y + 2, w - 6, h - 8, '#a07a55');
       R(g, X + 8, Y + 6, 8, 5, '#3b3747'); R(g, X + 9, Y + 7, 6, 3, '#5fc9a8');
       R(g, X + 40, Y + 12, 6, 6, '#f2eee2'); R(g, X + 26, Y + 8, 3, 3, '#e07a55');
+      if (ctx.pizza) {
+        // açık pizza kutusu; dilim sayısı azaldıkça boşalır
+        R(g, X + 20, Y + 3, 24, 4, '#c9a46a'); R(g, X + 20, Y + 7, 24, 18, '#e0c08a'); R(g, X + 22, Y + 9, 20, 14, '#d39a4a');
+        for (let i = 0; i < ctx.pizza; i++) { const sx = X + 23 + (i % 3) * 6, sy = Y + 10 + Math.floor(i / 3) * 6; R(g, sx, sy, 5, 5, '#f2c14e'); R(g, sx + 1, sy + 1, 2, 2, '#c0392b'); R(g, sx + 3, sy + 3, 1, 1, '#5a8f3a'); }
+      }
       break;
     case 'plant': {
       const sw = Math.round(Math.sin(t * 1.3 + f.x) * 0.8);
@@ -363,6 +381,26 @@ function drawFurniture(g, f, t, ctx) {
     case 'beanbag':
       R(g, X + 1, Y + 6, 14, 9, shade(f.color, -0.25)); R(g, X + 2, Y + 3, 12, 10, f.color); R(g, X + 4, Y + 4, 5, 2, shade(f.color, 0.25));
       break;
+    case 'bowlFood': case 'bowlWater': {
+      const food = f.type === 'bowlFood', lvl = ctx.bowls ? ctx.bowls[food ? 'food' : 'water'] : 1;
+      if (food) { R(g, X - 2, Y + 7, 36, 9, '#3c5a52'); R(g, X + 26, Y + 9, 2, 2, '#4d7066'); R(g, X + 29, Y + 11, 2, 2, '#4d7066'); R(g, X + 27, Y + 13, 2, 1, '#4d7066'); }
+      const rim = food ? '#d0574f' : '#4f8fc0';
+      R(g, X + 2, Y + 9, 12, 5, shade(rim, -0.3)); R(g, X + 3, Y + 8, 10, 2, rim); R(g, X + 4, Y + 9, 8, 2, '#2a2433');
+      if (lvl > 0.02) {
+        const hh = Math.max(1, Math.round(lvl * 3));
+        if (food) { R(g, X + 4, Y + 10 - hh, 8, hh + 1, '#a0623a'); for (let i = 0; i < 4; i++) R(g, X + 5 + i * 2, Y + 10 - hh, 1, 1, '#c9874f'); }
+        else { R(g, X + 4, Y + 9, 8, 2, '#8fd0f0'); if (Math.floor(t * 2) % 2) R(g, X + 6 + (Math.floor(t) % 3), Y + 9, 2, 1, '#e3f5fc'); }
+      }
+      break;
+    }
+    case 'cattree': {
+      R(g, X + 2, Y + 11, 13, 4, '#9c7a5a'); R(g, X + 2, Y + 11, 13, 1, '#b8946e');
+      R(g, X + 6, Y - 22, 4, 34, '#d9c49a'); for (let i = Y - 20; i < Y + 10; i += 3) R(g, X + 6, i, 4, 1, '#bfa77a');
+      R(g, X + 1, Y - 6, 12, 3, '#9c7a5a'); R(g, X, Y - 26, 15, 4, '#9c7a5a'); R(g, X, Y - 26, 15, 1, '#b8946e');
+      const sw = Math.round(Math.sin(t * 2.2) * 1.5);
+      R(g, X + 13, Y - 22, 1, 7, '#e9e2d0'); R(g, X + 12 + sw, Y - 15, 3, 3, '#e5606a');
+      break;
+    }
     case 'arcade': {
       R(g, X + 1, Y - 16, 14, 30, '#3b2a5c'); R(g, X + 2, Y - 15, 12, 4, '#e07a55');
       R(g, X + 3, Y - 10, 10, 9, '#0c0c12');
@@ -395,6 +433,11 @@ const ICONS = {
   zz: ['####.', '..#..', '.#...', '####.', '.....', '.....'],
   bolt: ['...#.', '..#..', '.###.', '..#..', '.#...', '.....'],
   dots: ['.....', '.....', '#.#.#', '.....', '.....', '.....'],
+  fish: ['.....', '#..#.', '####.', '#####', '####.', '#..#.'],
+  drop: ['..#..', '.###.', '.###.', '#####', '#####', '.###.'],
+  music: ['..###', '..#.#', '..#.#', '.##.#', '###.#', '.#.##'],
+  anger: ['#.#.#', '.#.#.', '#...#', '.#.#.', '#.#.#', '.....'],
+  game: ['.....', '#####', '#.#.#', '#####', '.#.#.', '.....'],
 };
 function drawIcon(g, name, cx, y, col, bg) {
   const m = ICONS[name]; if (!m) return;
